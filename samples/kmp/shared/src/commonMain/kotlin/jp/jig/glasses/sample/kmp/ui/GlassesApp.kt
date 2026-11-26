@@ -24,6 +24,7 @@ private enum class ConnectedScreen {
     ASCII_VIDEO,
     BINARY_VIDEO,
     CANVAS_ANIMATION,
+    VOICE_MENU,
 }
 
 @Composable
@@ -55,6 +56,12 @@ fun GlassesApp(manager: GlassManager) {
             onOpenAsciiVideoScreen = { screen = ConnectedScreen.ASCII_VIDEO },
             onOpenBinaryVideoScreen = { screen = ConnectedScreen.BINARY_VIDEO },
             onOpenCanvasAnimationScreen = { screen = ConnectedScreen.CANVAS_ANIMATION },
+            onOpenVoiceMenuScreen = { screen = ConnectedScreen.VOICE_MENU },
+        )
+
+        ConnectedScreen.VOICE_MENU -> VoiceMenuScreen(
+            client = currentClient,
+            onBack = { screen = ConnectedScreen.COMMAND },
         )
 
         ConnectedScreen.TELEPROMPTER -> TeleprompterScreen(

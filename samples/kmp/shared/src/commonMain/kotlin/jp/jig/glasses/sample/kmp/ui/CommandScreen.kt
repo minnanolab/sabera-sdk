@@ -57,6 +57,7 @@ fun CommandScreen(
     onOpenAsciiVideoScreen: () -> Unit,
     onOpenBinaryVideoScreen: () -> Unit,
     onOpenCanvasAnimationScreen: () -> Unit,
+    onOpenVoiceMenuScreen: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val commandManager = remember(client) { client.createCommandManager() }
@@ -122,6 +123,7 @@ fun CommandScreen(
             CommandButton("アスキーアートを流す画面へ", onClick = onOpenAsciiVideoScreen)
             CommandButton("2値画像を流す画面へ", onClick = onOpenBinaryVideoScreen)
             CommandButton("キャンバスに動画を流す画面へ", onClick = onOpenCanvasAnimationScreen)
+            CommandButton("音声メニューの画面へ", onClick = onOpenVoiceMenuScreen)
             CommandButton("Home に戻す") { safeRun("enterHomePage") { commandManager.enterHomePage() } }
 
             HorizontalDivider(Modifier.padding(vertical = 16.dp))
