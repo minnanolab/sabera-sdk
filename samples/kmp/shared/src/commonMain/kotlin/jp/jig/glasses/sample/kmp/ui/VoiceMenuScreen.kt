@@ -26,6 +26,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.jigglass.glass.CommandManager
 import app.jigglass.glass.GestureType
 import app.jigglass.glass.GlassClient
 import kotlinx.coroutines.Job
@@ -34,8 +35,8 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "VoiceMenuScreen"
 
-/** メニュー項目。今は 1・2・3 の3つだけ */
-private val MENU_ITEMS = listOf("1", "2", "3")
+/** メニュー項目。1番は血糖値グラフ */
+private val MENU_ITEMS = listOf("1.血糖値", "2", "3")
 
 /** 決定の表示を出してからメニューに戻るまでの時間 */
 private const val DECIDED_SHOW_MS = 2500L
@@ -66,6 +67,9 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
     var decided by remember { mutableStateOf<String?>(null) }
     var lastHeard by remember { mutableStateOf("") }
     var voiceStatus by remember { mutableStateOf("音声はまだ開始していません") }
+    var glucoseNote by remember { mutableStateOf("") }
+    var fetchingGlucose by remember { mutableStateOf(false) }
+    var showingGlucose by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     fun menuText(): String = buildString {
@@ -88,14 +92,78 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
 
     fun move(delta: Int) {
         decided = null
+        if (showingGlucose) {
+            // グラフ表示中なら、まずメニュー表示に戻す
+            showingGlucose = false
+            try {
+                commandManager.closeCanvas()
+                commandManager.enterEmptyScreenPage()
+            } catch (e: Throwable) {
+                SampleLog.e(TAG, "backToMenu FAILED", e)
+            }
+        }
         selected = (selected + delta + MENU_ITEMS.size) % MENU_ITEMS.size
         sendToGlasses(menuText())
     }
 
+    fun showGlucose() {
+        if (fetchingGlucose) return
+        fetchingGlucose = true
+        glucoseNote = "血糖値を読み込んでいます…"
+        fetchGlucoseData { result ->
+            fetchingGlucose = false
+            result.onSuccess { data ->
+                glucoseNote = "最新 ${data.latest}（${data.latestTime}）" +
+                    " 最高 ${data.max} / 最低 ${data.min} / 平均 ${data.avg}"
+                try {
+                    val image = renderGlucoseGraph(data)
+                    commandManager.sendCanvas(
+                        listOf(
+                            CommandManager.CanvasElement(
+                                id = 0, x = 16, y = 8, width = 560, height = 44,
+                                text = "血糖値（24時間）",
+                            ),
+                            CommandManager.CanvasElement(
+                                id = 1, x = 232, y = 60, width = 340, height = 84,
+                                text = "最新 ${data.latest}",
+                            ),
+                            CommandManager.CanvasElement(
+                                id = 2, x = 232, y = 152, width = 340, height = 110,
+                                text = "最高 ${data.max}\n最低 ${data.min}\n平均 ${data.avg}",
+                            ),
+                            CommandManager.CanvasElement(
+                                id = 3, x = 16, y = 272, width = 560, height = 40,
+                                text = "最新は ${data.latestTime} の値です",
+                            ),
+                        ),
+                    )
+                    commandManager.sendCanvasImage(
+                        id = 0, x = 16, y = 60,
+                        width = image.width, height = image.height,
+                        grayscale = image.pixels,
+                    )
+                    showingGlucose = true
+                } catch (e: Throwable) {
+                    SampleLog.e(TAG, "showGlucose FAILED", e)
+                    error = e.message
+                }
+            }.onFailure { e ->
+                SampleLog.e(TAG, "fetchGlucoseData FAILED", e)
+                glucoseNote = "血糖値を読み込めませんでした"
+                sendToGlasses("血糖値を\n読み込めませんでした")
+            }
+        }
+    }
+
     fun decide() {
-        val item = MENU_ITEMS[selected]
-        decided = item
-        sendToGlasses("「$item」を選びました")
+        if (selected == 0) {
+            decided = MENU_ITEMS[selected]
+            showGlucose()
+        } else {
+            val item = MENU_ITEMS[selected]
+            decided = item
+            sendToGlasses("「$item」を選びました")
+        }
     }
 
     fun handleHeard(text: String) {
@@ -127,12 +195,19 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
                 if (gesture == GestureType.SINGLE_TAP) decide()
             }
         }
-        onDispose { job.cancel() }
+        onDispose {
+            job.cancel()
+            try {
+                commandManager.closeCanvas()
+            } catch (e: Throwable) {
+                SampleLog.e(TAG, "closeCanvas FAILED", e)
+            }
+        }
     }
 
-    // 決定の表示をしばらく出したらメニューに戻す
+    // 決定の表示をしばらく出したらメニューに戻す（血糖値グラフはそのまま残す）
     LaunchedEffect(decided) {
-        if (decided != null) {
+        if (decided != null && selected != 0) {
             delay(DECIDED_SHOW_MS)
             decided = null
             sendToGlasses(menuText())
@@ -165,6 +240,10 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
             Text(voiceStatus, style = MaterialTheme.typography.bodyMedium)
             if (lastHeard.isNotBlank()) {
                 Text("聞き取った言葉: $lastHeard", style = MaterialTheme.typography.bodyMedium)
+            }
+            if (glucoseNote.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(glucoseNote, style = MaterialTheme.typography.bodyLarge)
             }
 
             Spacer(Modifier.height(24.dp))
