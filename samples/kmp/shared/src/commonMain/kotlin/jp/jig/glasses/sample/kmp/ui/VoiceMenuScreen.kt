@@ -18,7 +18,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,16 +29,12 @@ import app.jigglass.glass.CommandManager
 import app.jigglass.glass.GestureType
 import app.jigglass.glass.GlassClient
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "VoiceMenuScreen"
 
-/** メニュー項目。1番は血糖値グラフ */
-private val MENU_ITEMS = listOf("1.血糖値", "2", "3")
-
-/** 決定の表示を出してからメニューに戻るまでの時間 */
-private const val DECIDED_SHOW_MS = 2500L
+/** メニュー項目。1=血糖値グラフ、2=株価、3=今日の予定、4=現在地の天気、5=家族メモ */
+private val MENU_ITEMS = listOf("1.血糖値", "2.株価", "3.今日の予定", "4.天気", "5.家族メモ")
 
 /**
  * スマホ側の音声認識を始める。聞き取った全文が onText に届く。
@@ -70,6 +65,18 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
     var glucoseNote by remember { mutableStateOf("") }
     var fetchingGlucose by remember { mutableStateOf(false) }
     var showingGlucose by remember { mutableStateOf(false) }
+    var stocksNote by remember { mutableStateOf("") }
+    var fetchingStocks by remember { mutableStateOf(false) }
+    var showingStocks by remember { mutableStateOf(false) }
+    var scheduleNote by remember { mutableStateOf("") }
+    var fetchingSchedule by remember { mutableStateOf(false) }
+    var showingSchedule by remember { mutableStateOf(false) }
+    var weatherNote by remember { mutableStateOf("") }
+    var fetchingWeather by remember { mutableStateOf(false) }
+    var showingWeather by remember { mutableStateOf(false) }
+    var memosNote by remember { mutableStateOf("") }
+    var fetchingMemos by remember { mutableStateOf(false) }
+    var showingMemos by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     fun menuText(): String = buildString {
@@ -90,11 +97,39 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
         }
     }
 
+    /** タイトル＋本文行のパネルをグラスに出す */
+    fun displayPanel(title: String, lines: List<String>, onShown: () -> Unit) {
+        try {
+            commandManager.sendCanvas(
+                listOf(
+                    CommandManager.CanvasElement(
+                        id = 0, x = 16, y = 8, width = 560, height = 44,
+                        text = title,
+                    ),
+                    CommandManager.CanvasElement(
+                        id = 1, x = 16, y = 60, width = 560, height = 340,
+                        text = lines.joinToString("\n"),
+                    ),
+                ),
+            )
+            onShown()
+        } catch (e: Throwable) {
+            SampleLog.e(TAG, "displayPanel FAILED", e)
+            error = e.message
+        }
+    }
+
     fun move(delta: Int) {
         decided = null
-        if (showingGlucose) {
-            // グラフ表示中なら、まずメニュー表示に戻す
+        if (showingGlucose || showingStocks || showingSchedule ||
+            showingWeather || showingMemos
+        ) {
+            // パネル表示中なら、まずメニュー表示に戻す
             showingGlucose = false
+            showingStocks = false
+            showingSchedule = false
+            showingWeather = false
+            showingMemos = false
             try {
                 commandManager.closeCanvas()
                 commandManager.enterEmptyScreenPage()
@@ -155,22 +190,109 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
         }
     }
 
-    fun decide() {
-        if (selected == 0) {
-            decided = MENU_ITEMS[selected]
-            showGlucose()
-        } else {
-            val item = MENU_ITEMS[selected]
-            decided = item
-            sendToGlasses("「$item」を選びました")
+    fun showStocks() {
+        if (fetchingStocks) return
+        fetchingStocks = true
+        stocksNote = "株価を読み込んでいます…"
+        fetchStocksData { result ->
+            fetchingStocks = false
+            result.onSuccess { data ->
+                stocksNote = data.title
+                try {
+                    commandManager.sendCanvas(
+                        listOf(
+                            CommandManager.CanvasElement(
+                                id = 0, x = 16, y = 8, width = 560, height = 44,
+                                text = data.title,
+                            ),
+                            CommandManager.CanvasElement(
+                                id = 1, x = 16, y = 60, width = 560, height = 340,
+                                text = data.lines.joinToString("\n"),
+                            ),
+                        ),
+                    )
+                    showingStocks = true
+                } catch (e: Throwable) {
+                    SampleLog.e(TAG, "showStocks FAILED", e)
+                    error = e.message
+                }
+            }.onFailure { e ->
+                SampleLog.e(TAG, "fetchStocksData FAILED", e)
+                stocksNote = "株価を読み込めませんでした"
+                sendToGlasses("株価を\n読み込めませんでした")
+            }
         }
     }
+
+    fun showSchedule() {
+        if (fetchingSchedule) return
+        fetchingSchedule = true
+        scheduleNote = "予定を読み込んでいます…"
+        fetchScheduleData { result ->
+            fetchingSchedule = false
+            result.onSuccess { data ->
+                scheduleNote = data.title
+                displayPanel(data.title, data.lines) { showingSchedule = true }
+            }.onFailure { e ->
+                SampleLog.e(TAG, "fetchScheduleData FAILED", e)
+                scheduleNote = "予定を読み込めませんでした"
+                sendToGlasses("予定を\n読み込めませんでした")
+            }
+        }
+    }
+
+    fun showWeather(fetch: (onResult: (Result<WeatherData>) -> Unit) -> Unit) {
+        if (fetchingWeather) return
+        fetchingWeather = true
+        weatherNote = "天気を読み込んでいます…"
+        fetch { result ->
+            fetchingWeather = false
+            result.onSuccess { data ->
+                weatherNote = data.title
+                displayPanel(data.title, data.lines) { showingWeather = true }
+            }.onFailure { e ->
+                SampleLog.e(TAG, "fetchWeather FAILED", e)
+                weatherNote = "天気を読み込めませんでした（${e.message ?: "不明なエラー"}）"
+                sendToGlasses("天気を\n読み込めませんでした")
+            }
+        }
+    }
+
+    fun showMemos() {
+        if (fetchingMemos) return
+        fetchingMemos = true
+        memosNote = "メモを読み込んでいます…"
+        fetchMemosData { result ->
+            fetchingMemos = false
+            result.onSuccess { data ->
+                memosNote = data.title
+                displayPanel(data.title, data.lines) { showingMemos = true }
+            }.onFailure { e ->
+                SampleLog.e(TAG, "fetchMemosData FAILED", e)
+                memosNote = "メモを読み込めませんでした"
+                sendToGlasses("メモを\n読み込めませんでした")
+            }
+        }
+    }
+
+    fun decide(fetchWeatherFn: (onResult: (Result<WeatherData>) -> Unit) -> Unit) {
+        decided = MENU_ITEMS[selected]
+        when (selected) {
+            0 -> showGlucose()
+            1 -> showStocks()
+            2 -> showSchedule()
+            3 -> showWeather(fetchWeatherFn)
+            4 -> showMemos()
+        }
+    }
+
+    val fetchWeather = rememberWeatherFetcher()
 
     fun handleHeard(text: String) {
         lastHeard = text
         when {
             text.contains("決定") || text.contains("けってい") ||
-                text.contains("決めて") || text.contains("きめて") -> decide()
+                text.contains("決めて") || text.contains("きめて") -> decide(fetchWeather)
 
             text.contains("上") || text.contains("うえ") -> move(-1)
             text.contains("下") || text.contains("した") -> move(1)
@@ -192,7 +314,7 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
         }
         val job: Job = scope.launch {
             commandManager.gestureEvents.collect { gesture ->
-                if (gesture == GestureType.SINGLE_TAP) decide()
+                if (gesture == GestureType.SINGLE_TAP) decide(fetchWeather)
             }
         }
         onDispose {
@@ -202,15 +324,6 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
             } catch (e: Throwable) {
                 SampleLog.e(TAG, "closeCanvas FAILED", e)
             }
-        }
-    }
-
-    // 決定の表示をしばらく出したらメニューに戻す（血糖値グラフはそのまま残す）
-    LaunchedEffect(decided) {
-        if (decided != null && selected != 0) {
-            delay(DECIDED_SHOW_MS)
-            decided = null
-            sendToGlasses(menuText())
         }
     }
 
@@ -245,6 +358,22 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 Text(glucoseNote, style = MaterialTheme.typography.bodyLarge)
             }
+            if (stocksNote.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(stocksNote, style = MaterialTheme.typography.bodyLarge)
+            }
+            if (scheduleNote.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(scheduleNote, style = MaterialTheme.typography.bodyLarge)
+            }
+            if (weatherNote.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(weatherNote, style = MaterialTheme.typography.bodyLarge)
+            }
+            if (memosNote.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(memosNote, style = MaterialTheme.typography.bodyLarge)
+            }
 
             Spacer(Modifier.height(24.dp))
             Button(
@@ -270,7 +399,7 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
-                onClick = { decide() },
+                onClick = { decide(fetchWeather) },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("決定")
