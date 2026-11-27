@@ -97,7 +97,12 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
         }
     }
 
-    /** タイトル＋本文行のパネルをグラスに出す */
+    /**
+     * タイトル＋本文行のパネルをグラスに出す。
+     * キャンバスのテキストは1回の送信で合計190バイト程度までしか送れない
+     * （日本語は1文字3バイト）ため、タイトルと各行を1要素ずつ分けて送る。
+     * 要素は id 0..7 の8個までなので、本文は最大7行。
+     */
     fun displayPanel(title: String, lines: List<String>, onShown: () -> Unit) {
         try {
             commandManager.sendCanvas(
@@ -106,12 +111,19 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
                         id = 0, x = 16, y = 8, width = 560, height = 44,
                         text = title,
                     ),
-                    CommandManager.CanvasElement(
-                        id = 1, x = 16, y = 60, width = 560, height = 340,
-                        text = lines.joinToString("\n"),
-                    ),
                 ),
             )
+            lines.take(7).forEachIndexed { index, line ->
+                commandManager.sendCanvasElements(
+                    listOf(
+                        CommandManager.CanvasElement(
+                            id = index + 1, x = 16, y = 60 + index * 40,
+                            width = 560, height = 38,
+                            text = line,
+                        ),
+                    ),
+                )
+            }
             onShown()
         } catch (e: Throwable) {
             SampleLog.e(TAG, "displayPanel FAILED", e)
@@ -198,24 +210,7 @@ fun VoiceMenuScreen(client: GlassClient, onBack: () -> Unit) {
             fetchingStocks = false
             result.onSuccess { data ->
                 stocksNote = data.title
-                try {
-                    commandManager.sendCanvas(
-                        listOf(
-                            CommandManager.CanvasElement(
-                                id = 0, x = 16, y = 8, width = 560, height = 44,
-                                text = data.title,
-                            ),
-                            CommandManager.CanvasElement(
-                                id = 1, x = 16, y = 60, width = 560, height = 340,
-                                text = data.lines.joinToString("\n"),
-                            ),
-                        ),
-                    )
-                    showingStocks = true
-                } catch (e: Throwable) {
-                    SampleLog.e(TAG, "showStocks FAILED", e)
-                    error = e.message
-                }
+                displayPanel(data.title, data.lines) { showingStocks = true }
             }.onFailure { e ->
                 SampleLog.e(TAG, "fetchStocksData FAILED", e)
                 stocksNote = "株価を読み込めませんでした"
